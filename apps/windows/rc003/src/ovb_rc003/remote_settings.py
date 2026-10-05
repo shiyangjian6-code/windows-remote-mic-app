@@ -19,6 +19,7 @@ CONFIG_FIELDS = frozenset({
 })
 BINDING_FIELDS = frozenset({
     "bindings", "secondary_bindings", "combo_bindings", "display_notes", "physical_bindings",
+    "button_presets",
 })
 
 

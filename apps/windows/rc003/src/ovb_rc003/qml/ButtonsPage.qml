@@ -222,8 +222,7 @@ Item {
             kind: bodyKind
             width: 340
             wrapMode: Text.WordWrap
-            text: qsTr("这会把当前遥控器的 %1 个按键恢复为内置映射，并立即自动保存。另一台的设置不变。")
-                .arg(SettingsController.isRc003Device ? 13 : 15)
+            text: qsTr("这会恢复当前预设的普通按键及共用话筒键，并立即自动保存。其他两套预设的普通按键和语音页设置不变。")
         }
     }
 
@@ -1119,6 +1118,120 @@ Item {
         }
     }
 
+    SettingsDialog {
+        id: presetNameDialog
+        objectName: "buttonPresetNameDialog"
+        property string operationError: ""
+        onOpened: operationError = ""
+        tokens: root.tokens
+        title: qsTr("重命名当前预设")
+        preferredWidth: 360
+        contentItem: ColumnLayout {
+            spacing: 12
+            CompactTextField {
+                id: presetNameInput
+                objectName: "buttonPresetNameInput"
+                tokens: root.tokens
+                Layout.fillWidth: true
+                maximumLength: 24
+                placeholderText: qsTr("输入预设名称")
+                onAccepted: presetNameSave.clicked()
+            }
+            UiLabel {
+                tokens: root.tokens
+                Layout.fillWidth: true
+                visible: presetNameDialog.operationError.length > 0
+                text: presetNameDialog.operationError
+                color: root.tokens.errorColor
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Item { Layout.fillWidth: true }
+                CompactButton {
+                    tokens: root.tokens
+                    text: qsTr("取消")
+                    onClicked: presetNameDialog.close()
+                }
+                CompactButton {
+                    id: presetNameSave
+                    objectName: "saveButtonPresetName"
+                    tokens: root.tokens
+                    text: qsTr("保存")
+                    highlighted: true
+                    enabled: presetNameInput.text.trim().length > 0
+                    onClicked: {
+                        if (SettingsController.renameButtonPreset(SettingsController.activeButtonPreset, presetNameInput.text))
+                            presetNameDialog.close()
+                        else
+                            presetNameDialog.operationError = SettingsController.errorMessage
+                    }
+                }
+            }
+        }
+    }
+
+    SettingsDialog {
+        id: presetCopyDialog
+        objectName: "buttonPresetCopyDialog"
+        property string operationError: ""
+        onOpened: operationError = ""
+        tokens: root.tokens
+        title: qsTr("复制到当前预设")
+        preferredWidth: 420
+        contentItem: ColumnLayout {
+            spacing: 12
+            UiLabel {
+                tokens: root.tokens
+                Layout.fillWidth: true
+                text: qsTr("选择要复制的预设：")
+            }
+            SelectionComboBox {
+                id: presetCopySource
+                objectName: "buttonPresetCopySource"
+                tokens: root.tokens
+                Layout.fillWidth: true
+                model: SettingsController.buttonPresetNames
+            }
+            UiLabel {
+                tokens: root.tokens
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: qsTr("将覆盖「%1」的普通按键配置。语音设置和话筒键保持不变。")
+                    .arg(SettingsController.buttonPresetNames[SettingsController.activeButtonPreset])
+            }
+            RowLayout {
+                Item { Layout.fillWidth: true }
+                CompactButton {
+                    tokens: root.tokens
+                    text: qsTr("取消")
+                    onClicked: presetCopyDialog.close()
+                }
+                CompactButton {
+                    objectName: "confirmButtonPresetCopy"
+                    tokens: root.tokens
+                    text: qsTr("确认覆盖")
+                    highlighted: true
+                    enabled: presetCopySource.currentIndex >= 0
+                        && presetCopySource.currentIndex !== SettingsController.activeButtonPreset
+                    onClicked: {
+                        if (SettingsController.copyButtonPreset(presetCopySource.currentIndex, SettingsController.activeButtonPreset))
+                            presetCopyDialog.close()
+                        else
+                            presetCopyDialog.operationError = SettingsController.errorMessage
+                    }
+                }
+            }
+            UiLabel {
+                tokens: root.tokens
+                Layout.fillWidth: true
+                visible: presetCopyDialog.operationError.length > 0
+                text: presetCopyDialog.operationError
+                color: root.tokens.errorColor
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
     Item {
         id: rc003MappingLayout
         objectName: "rc003MappingLayout"
@@ -1164,6 +1277,56 @@ Item {
                         text: SettingsController.deviceOptions[1]
                         highlighted: !SettingsController.isRc003Device
                         subduedText: !highlighted
+                    }
+                }
+            }
+
+            RowLayout {
+                id: presetBar
+                objectName: "buttonPresetBar"
+                Layout.fillWidth: true
+                spacing: 6
+                enabled: !SettingsController.settingsSaveBusy && !SettingsController.inputCaptureInUse
+                Repeater {
+                    model: 3
+                    CompactButton {
+                        required property int index
+                        objectName: "buttonPreset" + index
+                        tokens: root.tokens
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.minimumWidth: 64
+                        text: SettingsController.buttonPresetNames[index]
+                        highlighted: SettingsController.activeButtonPreset === index
+                        Accessible.name: qsTr("按键预设：%1").arg(text)
+                        onClicked: {
+                            if (root.commitPendingEditorDraft())
+                                SettingsController.selectButtonPreset(index)
+                        }
+                    }
+                }
+                CompactButton {
+                    objectName: "renameButtonPreset"
+                    tokens: root.tokens
+                    text: qsTr("改名")
+                    onClicked: {
+                        if (!root.commitPendingEditorDraft())
+                            return
+                        presetNameInput.text = SettingsController.buttonPresetNames[SettingsController.activeButtonPreset]
+                        presetNameDialog.open()
+                        presetNameInput.forceActiveFocus()
+                        presetNameInput.selectAll()
+                    }
+                }
+                CompactButton {
+                    objectName: "copyButtonPreset"
+                    tokens: root.tokens
+                    text: qsTr("复制自…")
+                    onClicked: {
+                        if (!root.commitPendingEditorDraft())
+                            return
+                        presetCopySource.currentIndex = (SettingsController.activeButtonPreset + 1) % 3
+                        presetCopyDialog.open()
                     }
                 }
             }

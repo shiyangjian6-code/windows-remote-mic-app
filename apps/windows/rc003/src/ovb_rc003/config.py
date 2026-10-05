@@ -864,8 +864,10 @@ def _normalize_display_notes(bindings: Dict[str, Any], profile: str = "xiaomi-rc
 
 
 def save_key_bindings(path: Path, bindings: Dict[str, Any]) -> None:
-    from . import remote_settings, remote_selection
+    from . import button_presets, remote_settings, remote_selection
     persisted = _without_runtime_only_keys(bindings)
+    if button_presets.STORE in persisted:
+        persisted = button_presets.sync(persisted)
     persisted["schema_version"] = SCHEMA_VERSION
     _assert_no_forbidden_keys(persisted)
     latest = _read_settings_document(path)

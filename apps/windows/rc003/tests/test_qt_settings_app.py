@@ -5322,6 +5322,69 @@ class SettingsControllerTests(unittest.TestCase):
         self.assertTrue(controller.settingsDirty)
         self.assertIn("自动保存", controller.statusMessage)
 
+    def test_button_presets_switch_saves_edits_and_restores_without_restart(self):
+        from PySide6.QtCore import QCoreApplication
+        app = QCoreApplication.instance() or QCoreApplication([])
+        controller, model = self._make_controller()
+        self.assertTrue(hasattr(controller, "selectButtonPreset"), "preset UI is missing")
+        before = model.to_display_map()["power"]
+        mic = model.to_display_map()["mic"]
+        model.setActionTextAt(model.index_of("power"), "ctrl+l")
+        with mock.patch.object(bridge_launcher, "reload_in_process_bridge_settings") as reload_now, \
+                mock.patch.object(bridge_launcher, "launch_bridge") as launch:
+            self.assertTrue(controller.selectButtonPreset(1))
+            self.assertEqual(controller.activeButtonPreset, 1)
+            self.assertEqual(model.to_display_map()["power"], before)
+            self.assertEqual(model.to_display_map()["mic"], mic)
+            reload_now.assert_called_once()
+            launch.assert_not_called()
+        app.processEvents()  # A queued old auto-save must not overwrite the new slot.
+        self.assertTrue(controller.selectButtonPreset(0))
+        self.assertEqual(model.to_display_map()["power"], "ctrl+l")
+        self.assertTrue(controller.renameButtonPreset(0, "办公"))
+        self.assertTrue(controller.selectButtonPreset(2))
+        restored, _ = self._make_controller()
+        self.assertEqual(restored.activeButtonPreset, 2)
+        self.assertEqual(restored.buttonPresetNames[0], "办公")
+
+    def test_button_presets_failed_save_keeps_selection_and_edits(self):
+        controller, model = self._make_controller()
+        self.assertTrue(hasattr(controller, "selectButtonPreset"), "preset UI is missing")
+        model.setActionTextAt(model.index_of("power"), "ctrl+l")
+        with mock.patch.object(config, "save_settings_pair", side_effect=PermissionError("locked")):
+            self.assertFalse(controller.selectButtonPreset(1))
+        self.assertEqual(controller.activeButtonPreset, 0)
+        self.assertEqual(model.to_display_map()["power"], "ctrl+l")
+        self.assertTrue(controller.mappingDirty)
+        self.assertTrue(controller.selectButtonPreset(1))
+        with mock.patch.object(config, "save_key_bindings", side_effect=PermissionError("locked")):
+            self.assertFalse(controller.selectButtonPreset(2))
+        self.assertEqual(controller.activeButtonPreset, 1)
+
+    def test_button_presets_copy_ordinary_mappings_but_leave_voice_drafts_alone(self):
+        controller, model = self._make_controller()
+        self.assertTrue(hasattr(controller, "selectButtonPreset"), "preset UI is missing")
+        model.setActionTextAt(model.index_of("power"), "ctrl+l")
+        self.assertTrue(controller.selectButtonPreset(1))
+        cp = config.config_path(controller._config_root)
+        saved_voice = cp.read_bytes()
+        controller._voice_hotkeys[key_mapping.VoiceTriggerMode.HOLD] = "ctrl+shift+f10"
+        self.assertTrue(controller.copyButtonPreset(0, 1))
+        self.assertEqual(model.to_display_map()["power"], "ctrl+l")
+        self.assertEqual(cp.read_bytes(), saved_voice)
+        self.assertEqual(controller._voice_hotkeys[key_mapping.VoiceTriggerMode.HOLD], "ctrl+shift+f10")
+        self.assertTrue(controller.settingsDirty)
+
+    def test_button_presets_refuse_conflicting_async_save_and_bad_names(self):
+        controller, _ = self._make_controller()
+        self.assertTrue(hasattr(controller, "selectButtonPreset"), "preset UI is missing")
+        controller._settings_save_busy = True
+        self.assertFalse(controller.selectButtonPreset(1))
+        self.assertEqual(controller.activeButtonPreset, 0)
+        controller._settings_save_busy = False
+        self.assertFalse(controller.renameButtonPreset(0, " "))
+        self.assertEqual(controller.buttonPresetNames[0], "预设 1")
+
     def test_mapping_edit_auto_saves_after_the_event_loop_turn(self):
         from PySide6.QtCore import QCoreApplication
 
@@ -12016,7 +12079,8 @@ class SettingsShellSourceContractTests(unittest.TestCase):
         self.assertIn("recommendedIndex >= 0 && index >= 0", self.selection_combo_qml)
         self.assertIn('qsTr("（推荐）")', self.selection_combo_qml)
         self.assertIn("displayText: decoratedText(currentIndex, currentText)", self.selection_combo_qml)
-        self.assertEqual(self.buttons_qml.count("SelectionComboBox {"), 0)
+        self.assertEqual(self.buttons_qml.count("SelectionComboBox {"), 1)
+        self.assertIn('objectName: "buttonPresetCopySource"', self.buttons_qml)
         self.assertNotIn("SettingsController.comboModifierOptions", self.buttons_qml)
         self.assertIn(
             "model: SettingsController.voiceProgramOptions",
@@ -12619,11 +12683,14 @@ class SettingsShellSourceContractTests(unittest.TestCase):
 
     def test_buttons_page_device_track_precedes_single_mapping_and_actions(self):
         switch_index = self.buttons_qml.index('objectName: "mappingViewSwitcher"')
+        preset_index = self.buttons_qml.index('objectName: "buttonPresetBar"')
         single_index = self.buttons_qml.index('objectName: "mappingList"')
         actions_index = self.buttons_qml.index('objectName: "mappingActionsPanel"')
-        switcher_source = self.buttons_qml[switch_index:single_index]
+        switcher_source = self.buttons_qml[switch_index:preset_index]
 
         self.assertLess(switch_index, single_index)
+        self.assertLess(switch_index, preset_index)
+        self.assertLess(preset_index, single_index)
         self.assertLess(single_index, actions_index)
         self.assertEqual(switcher_source.count("Layout.preferredWidth: 1"), 2)
         self.assertIn("text: SettingsController.deviceOptions[0]", switcher_source)
@@ -13197,6 +13264,65 @@ class OffscreenQmlLoadTests(unittest.TestCase):
     Quick Controls internal-property-name collision this works around)
     fails fast in CI instead of only being noticed visually.
     """
+
+    def test_button_preset_controls_switch_rename_copy_and_fit(self):
+        import subprocess
+        script = _QML_LOAD_PROBE_SCRIPT.split("initial_settings_dirty =")[0] + r'''
+from PySide6.QtCore import QMetaObject
+window = root_objects[0]
+tab = window.findChild(QObject, "tabBar")
+tab.setProperty("currentIndex", 1)
+app.processEvents()
+def find(name):
+    obj = window.findChild(QObject, name)
+    # Repeater delegates are visual children of the layout, while their
+    # QObject ownership stays with the delegate context.
+    pending = [window.contentItem()]
+    while obj is None and pending:
+        item = pending.pop()
+        if item.objectName() == name:
+            obj = item
+            break
+        pending.extend(item.childItems())
+    assert obj is not None, name + " is missing"
+    return obj
+def click(name):
+    QMetaObject.invokeMethod(find(name), "clicked")
+    app.processEvents()
+bar = find("buttonPresetBar")
+assert bar.property("visible")
+click("buttonPreset1")
+assert controller.activeButtonPreset == 1
+click("renameButtonPreset")
+find("buttonPresetNameInput").setProperty("text", "Office")
+click("saveButtonPresetName")
+assert controller.buttonPresetNames[1] == "Office"
+model.setActionTextAt(model.index_of("power"), "ctrl+l")
+click("buttonPreset2")
+click("copyButtonPreset")
+find("buttonPresetCopySource").setProperty("currentIndex", 1)
+click("confirmButtonPresetCopy")
+assert controller.activeButtonPreset == 2
+assert model.to_display_map()["power"] == "ctrl+l"
+for width, height in ((900, 560), (1024, 720)):
+    window.setWidth(width)
+    window.setHeight(height)
+    app.processEvents()
+    assert bar.property("width") > 0
+    for name in ("buttonPreset0", "buttonPreset1", "buttonPreset2", "renameButtonPreset", "copyButtonPreset"):
+        item = find(name)
+        assert item.property("width") > 0
+        assert item.property("x") + item.property("width") <= bar.property("width") + 1
+assert not warnings, [str(w) for w in warnings]
+print(json.dumps({"presets": controller.buttonPresetNames, "active": controller.activeButtonPreset}))
+m._shutdown_qt_settings_app_at_exit()
+'''
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = dict(os.environ, QT_QPA_PLATFORM="offscreen", LOCALAPPDATA=tmpdir,
+                       RC003_DISABLE_LIVE_INPUT="1")
+            result = subprocess.run([sys.executable, "-c", script], env=env,
+                                    capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_main_qml_loads_with_zero_warnings_and_a_reasonable_window_size(self):
         import json

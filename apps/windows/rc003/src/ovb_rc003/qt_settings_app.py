@@ -114,6 +114,7 @@ from . import (
     bridge_control_windows,
     bridge_launcher,
     bridge_runtime_status,
+    button_presets,
     config,
     device_catalog,
     element_navigation_control_windows,
@@ -1117,6 +1118,7 @@ def _load_qt_classes() -> dict:
         no validation or business logic of its own.
         """
 
+        buttonPresetsChanged = Signal()
         hotkeyTextChanged = Signal()
         holdVoiceHotkeyTextChanged = Signal()
         endpointOptionsChanged = Signal()
@@ -1977,6 +1979,8 @@ def _load_qt_classes() -> dict:
                 QTimer.singleShot(0, self._request_endpoint_options_refresh)
 
         def _load_bindings_into_model(self) -> None:
+            self._bindings = button_presets.ensure(self._bindings)
+            self.buttonPresetsChanged.emit()
             profile = self._selected_device_id()
             self._model.set_profile(profile)
             if self._selected_button_id not in remote_layout.button_order(profile):
@@ -2028,6 +2032,73 @@ def _load_qt_classes() -> dict:
                 display_note_map,
             )
             self._model.set_selected_button(self._selected_button_id)
+
+        @Property("QStringList", notify=buttonPresetsChanged)
+        def buttonPresetNames(self):
+            store = button_presets.ensure(self._bindings)[button_presets.STORE]
+            return [slot["name"] for slot in store["slots"]]
+
+        @Property(int, notify=buttonPresetsChanged)
+        def activeButtonPreset(self):
+            return button_presets.ensure(self._bindings)[button_presets.STORE]["active"]
+
+        def _change_button_preset(self, change, *, reload_runtime: bool) -> bool:
+            if (self._mapping_auto_save_temporarily_blocked()
+                    or self._mapping_auto_save_running
+                    or self._remote_selection_busy
+                    or self._get_input_capture_in_use()
+                    or self._application_exit_requested
+                    or self._application_exit_confirmed
+                    or self._application_exit_intent.is_set()
+                    or self._save_then_exit_requested):
+                self._set_error_message("请等待当前设置操作完成后再操作预设。", self._BUTTONS_PAGE_INDEX)
+                return False
+            # Validate the request before saving any pending editor changes.
+            try:
+                change(self._bindings)
+            except ValueError as exc:
+                self._set_error_message(str(exc), self._BUTTONS_PAGE_INDEX)
+                return False
+            if self._mapping_dirty and not self._save_mapping():
+                return False
+            try:
+                updated = change(self._bindings)
+                # Publish only one file, so the bridge cannot observe a mixed
+                # voice/mapping pair. Unrelated voice-page drafts stay intact.
+                config.save_key_bindings(config.key_bindings_path(self._config_root), updated)
+            except Exception as exc:  # noqa: BLE001 - keep the old view on write failure
+                self._set_error_message(f"预设保存失败，当前预设未改变：{exc}", self._BUTTONS_PAGE_INDEX)
+                return False
+            self._bindings = updated
+            self._bump_settings_revision()
+            self._removed_voice_bindings = config.normalize_voice_product_boundary(self._config, self._bindings)
+            self._load_bindings_into_model()
+            self._refresh_settings_dirty_state()
+            self._set_error_message("")
+            if reload_runtime:
+                bridge_launcher.reload_in_process_bridge_settings()
+            self._set_status_message(
+                f"已选择「{self.buttonPresetNames[self.activeButtonPreset]}」。"
+                "无需重启；如正在说话或操作按键，将在本次操作结束后应用。"
+                if reload_runtime else "预设名称已保存。",
+                self._BUTTONS_PAGE_INDEX,
+            )
+            return True
+
+        @Slot(int, result=bool)
+        def selectButtonPreset(self, index: int) -> bool:
+            return self._change_button_preset(
+                lambda doc: button_presets.switch(doc, index), reload_runtime=True)
+
+        @Slot(int, str, result=bool)
+        def renameButtonPreset(self, index: int, name: str) -> bool:
+            return self._change_button_preset(
+                lambda doc: button_presets.rename(doc, index, name), reload_runtime=False)
+
+        @Slot(int, int, result=bool)
+        def copyButtonPreset(self, source: int, target: int) -> bool:
+            return self._change_button_preset(
+                lambda doc: button_presets.copy_slot(doc, source, target), reload_runtime=True)
 
         def _selected_device_id(self) -> str:
             from . import remote_selection

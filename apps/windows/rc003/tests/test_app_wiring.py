@@ -515,6 +515,53 @@ class StartupIdentityLoggingTests(unittest.TestCase):
 
 
 class LiveSettingsReloadTests(_AppWiringTestCase):
+    def test_button_preset_switch_waits_for_voice_release_and_latest_choice_wins(self):
+        from ovb_rc003 import button_presets
+        original = button_presets.ensure(config.load_key_bindings(self.app._bindings_path))
+        for index, kind in enumerate((key_mapping.ActionKind.ESCAPE,
+                                     key_mapping.ActionKind.RETURN,
+                                     key_mapping.ActionKind.MOUSE_LEFT_CLICK)):
+            original = button_presets.switch(original, index)
+            original["bindings"]["up"] = key_mapping.ButtonAction(kind).to_dict()
+        original = button_presets.switch(original, 0)
+        self._save_button_bindings(original)
+        original_hotkey = self.app._voice_shortcut.hotkey.serialize()
+        self.app._voice_shortcut.controller.on_mic_button_pressed()
+        for index in (1, 2):
+            changed = button_presets.switch(config.load_key_bindings(self.app._bindings_path), index)
+            self._save_button_bindings(changed)
+            self.assertEqual(self.app._bindings["bindings"]["up"]["kind"], "escape")
+            self.assertTrue(self.app._voice_shortcut.controller.active)
+        self.app._voice_shortcut.controller.on_mic_button_released()
+        self.app._apply_pending_settings_if_idle()
+        self.assertEqual(self.app._bindings[button_presets.STORE]["active"], 2)
+        self.assertEqual(self.app._bindings["bindings"]["up"]["kind"], "mouse_left_click")
+        self.assertEqual(self.app._voice_shortcut.hotkey.serialize(), original_hotkey)
+        self.assertIsNone(self.app._pending_bindings)
+
+    def test_button_preset_switch_preserves_delayed_gesture_owner(self):
+        from ovb_rc003 import button_presets
+        timers = self._use_manual_gesture_timers()
+        original = button_presets.ensure(config.default_key_bindings())
+        original["bindings"]["up"] = key_mapping.ButtonAction(key_mapping.ActionKind.ESCAPE).to_dict()
+        original["secondary_bindings"]["up"] = {
+            "double_click": key_mapping.ButtonAction(key_mapping.ActionKind.RETURN).to_dict()}
+        changed = button_presets.switch(original, 1)
+        changed["bindings"]["up"] = key_mapping.ButtonAction(key_mapping.ActionKind.MOUSE_LEFT_CLICK).to_dict()
+        original = button_presets.switch(changed, 0)
+        self._save_button_bindings(original)
+        self.app._on_button_event("up", True, event_source="hid")
+        self.app._on_button_event("up", False, event_source="hid")
+        self._save_button_bindings(button_presets.switch(original, 1))
+        self.assertIsNotNone(self.app._pending_bindings)
+        with mock.patch.object(win32_input, "send_escape") as old_action, \
+                mock.patch.object(win32_input, "send_mouse_button_click") as new_action:
+            timers[0].fire()
+        old_action.assert_called_once_with()
+        new_action.assert_not_called()
+        self.assertEqual(self.app._bindings[button_presets.STORE]["active"], 1)
+        self.assertIsNone(self.app._pending_bindings)
+
     def test_chromecast_attempt_claim_defers_provider_and_hotkey_reload(self):
         host = mock.Mock(_settings_claimed=True)
         self.app._chromecast_runtime.voice_host = host
