@@ -1119,6 +1119,7 @@ def _load_qt_classes() -> dict:
         """
 
         buttonPresetsChanged = Signal()
+        buttonPresetErrorChanged = Signal()
         hotkeyTextChanged = Signal()
         holdVoiceHotkeyTextChanged = Signal()
         endpointOptionsChanged = Signal()
@@ -1544,6 +1545,7 @@ def _load_qt_classes() -> dict:
             self._has_explicit_launch_result = False
             self._status_message = ""
             self._error_message = ""
+            self._button_preset_error = ""
             removed_windows_dictation = bool(
                 self._config.get(config.RUNTIME_REMOVED_WINDOWS_DICTATION_KEY)
             )
@@ -2042,6 +2044,10 @@ def _load_qt_classes() -> dict:
         def activeButtonPreset(self):
             return button_presets.ensure(self._bindings)[button_presets.STORE]["active"]
 
+        @Property(str, notify=buttonPresetErrorChanged)
+        def buttonPresetError(self):
+            return self._button_preset_error
+
         def _change_button_preset(self, change, *, reload_runtime: bool) -> bool:
             if (self._mapping_auto_save_temporarily_blocked()
                     or self._mapping_auto_save_running
@@ -2051,15 +2057,20 @@ def _load_qt_classes() -> dict:
                     or self._application_exit_confirmed
                     or self._application_exit_intent.is_set()
                     or self._save_then_exit_requested):
-                self._set_error_message("请等待当前设置操作完成后再操作预设。", self._BUTTONS_PAGE_INDEX)
+                message = "请等待当前设置操作完成后再操作预设。"
+                self._set_error_message(message, self._BUTTONS_PAGE_INDEX)
+                self._set_button_preset_error(message)
                 return False
             # Validate the request before saving any pending editor changes.
             try:
                 change(self._bindings)
             except ValueError as exc:
-                self._set_error_message(str(exc), self._BUTTONS_PAGE_INDEX)
+                message = str(exc)
+                self._set_error_message(message, self._BUTTONS_PAGE_INDEX)
+                self._set_button_preset_error(message)
                 return False
             if self._mapping_dirty and not self._save_mapping():
+                self._set_button_preset_error(self._error_message)
                 return False
             try:
                 updated = change(self._bindings)
@@ -2067,7 +2078,9 @@ def _load_qt_classes() -> dict:
                 # voice/mapping pair. Unrelated voice-page drafts stay intact.
                 config.save_key_bindings(config.key_bindings_path(self._config_root), updated)
             except Exception as exc:  # noqa: BLE001 - keep the old view on write failure
-                self._set_error_message(f"预设保存失败，当前预设未改变：{exc}", self._BUTTONS_PAGE_INDEX)
+                message = f"预设保存失败，当前预设未改变：{exc}"
+                self._set_error_message(message, self._BUTTONS_PAGE_INDEX)
+                self._set_button_preset_error(message)
                 return False
             self._bindings = updated
             self._bump_settings_revision()
@@ -2075,6 +2088,7 @@ def _load_qt_classes() -> dict:
             self._load_bindings_into_model()
             self._refresh_settings_dirty_state()
             self._set_error_message("")
+            self._set_button_preset_error("")
             if reload_runtime:
                 bridge_launcher.reload_in_process_bridge_settings()
             self._set_status_message(
@@ -3047,6 +3061,12 @@ def _load_qt_classes() -> dict:
                 )
             self._error_message = text
             self.errorMessageChanged.emit()
+
+        def _set_button_preset_error(self, text: str) -> None:
+            text = str(text)
+            if self._button_preset_error != text:
+                self._button_preset_error = text
+                self.buttonPresetErrorChanged.emit()
 
         def _set_settings_dirty(self, value: bool) -> None:
             value = bool(value)

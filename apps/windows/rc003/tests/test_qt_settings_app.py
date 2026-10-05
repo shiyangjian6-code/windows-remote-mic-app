@@ -14279,7 +14279,18 @@ m._shutdown_qt_settings_app_at_exit()
                     self.assertAlmostEqual(canvas["x"], board["x"], delta=1)
                     self.assertAlmostEqual(canvas["y"], board["y"], delta=1)
                     self.assertAlmostEqual(canvas["width"], board["width"], delta=1)
-                    self.assertAlmostEqual(canvas["height"], board["height"], delta=1)
+                    # The preset bar can make the RC003 board taller than
+                    # the smallest viewports; the canvases then span the
+                    # full scrollable content and the viewport clips them.
+                    self.assertAlmostEqual(
+                        canvas["height"],
+                        max(
+                            board["height"],
+                            mapping_items["leftMappingCards"]["height"],
+                            mapping_items["rightMappingCards"]["height"],
+                        ),
+                        delta=1,
+                    )
                 self.assertLessEqual(
                     mapping_items["leftMappingCards"]["right"],
                     mapping_items["photoSidebar"]["x"],
@@ -15580,7 +15591,10 @@ results_out = {
         "future_enabled": bool(future_device_button.property("enabled")),
     },
     "actions_panel": _geometry(actions_panel),
-    "mapping_list": _geometry(mapping_list),
+    "mapping_list": {
+        **_geometry(mapping_list),
+        "content_height": float(mapping_list.property("contentHeight")),
+    },
     "canvases": {
         "base": _geometry(mapping_lines),
         "active": _geometry(active_mapping_line),
@@ -15780,7 +15794,15 @@ class ButtonsPageMappingCardTests(unittest.TestCase):
             self.assertAlmostEqual(canvas["x"], board["x"], delta=1)
             self.assertAlmostEqual(canvas["y"], board["y"], delta=1)
             self.assertAlmostEqual(canvas["right"], board["right"], delta=1)
-            self.assertAlmostEqual(canvas["bottom"], board["bottom"], delta=1)
+            # The preset bar can make the RC003 board taller than the
+            # smallest viewports; the canvases then span the full
+            # scrollable content and the viewport clips them.
+            self.assertGreaterEqual(canvas["bottom"], board["bottom"] - 1)
+            self.assertAlmostEqual(
+                canvas["bottom"],
+                board["y"] + data["mapping_list"]["content_height"],
+                delta=1,
+            )
 
     def test_board_fits_default_minimum_and_large_windows(self):
         viewports = (
@@ -15810,10 +15832,19 @@ class ButtonsPageMappingCardTests(unittest.TestCase):
             )
             self.assertLess(data["left_cards"]["x"], data["photo"]["sidebar"]["x"])
             self.assertLess(data["photo"]["sidebar"]["x"], data["right_cards"]["x"])
+            # The preset bar can make the RC003 board taller than the
+            # smallest viewports. The board then scrolls (contentHeight
+            # covers the card columns), so a column top must stay visible
+            # and its bottom must be reachable within the scroll range.
+            scroll_extent = (
+                data["mapping_list"]["content_height"]
+                - data["mapping_list"]["height"]
+            )
             for card_column in (data["left_cards"], data["right_cards"]):
                 self.assertGreaterEqual(card_column["y"], data["mapping_list"]["y"] - 1)
                 self.assertLessEqual(
-                    card_column["bottom"], data["mapping_list"]["bottom"] + 1
+                    card_column["bottom"],
+                    data["mapping_list"]["bottom"] + max(0.0, scroll_extent) + 1,
                 )
             for card in data["cards"].values():
                 self.assertGreaterEqual(card["height"], 48)

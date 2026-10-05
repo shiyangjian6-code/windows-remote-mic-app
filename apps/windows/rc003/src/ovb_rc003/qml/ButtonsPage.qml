@@ -1163,7 +1163,7 @@ Item {
                         if (SettingsController.renameButtonPreset(SettingsController.activeButtonPreset, presetNameInput.text))
                             presetNameDialog.close()
                         else
-                            presetNameDialog.operationError = SettingsController.errorMessage
+                            presetNameDialog.operationError = SettingsController.buttonPresetError
                     }
                 }
             }
@@ -1217,7 +1217,7 @@ Item {
                         if (SettingsController.copyButtonPreset(presetCopySource.currentIndex, SettingsController.activeButtonPreset))
                             presetCopyDialog.close()
                         else
-                            presetCopyDialog.operationError = SettingsController.errorMessage
+                            presetCopyDialog.operationError = SettingsController.buttonPresetError
                     }
                 }
             }
@@ -1336,8 +1336,7 @@ Item {
                 objectName: "mappingList"
                 clip: true
                 contentWidth: width
-                contentHeight: SettingsController.isRc003Device ? height
-                    : Math.max(height, leftSideCards.implicitHeight, rightSideCards.implicitHeight)
+                contentHeight: Math.max(height, leftSideCards.implicitHeight, rightSideCards.implicitHeight)
                 flickableDirection: Flickable.VerticalFlick
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
